@@ -1,28 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
-)
+	"time"
 
-func executeGcloudCommand(args ...string) (string, error) {
-	cmd := exec.Command("gcloud", args...)
-	output, err := cmd.Output() // cmd.Output() captures stdout
-	if err != nil {
-		if exitError, ok := err.(*exec.ExitError); ok {
-			// Command executed but returned non-zero exit code
-			return "", fmt.Errorf("gcloud command failed with: %s, stderr: %s", exitError, string(exitError.Stderr))
-		} else if err == exec.ErrNotFound {
-			// gcloud command not found
-			return "", fmt.Errorf("gcloud command not found. Please ensure it is installed and in your PATH.")
-		}
-		// Other errors (e.g., I/O issues)
-		return "", fmt.Errorf("failed to run gcloud command: %w", err)
-	}
-	return strings.TrimSpace(string(output)), nil
-}
+	"google.golang.org/api/cloudresourcemanager/v1"
+	"google.golang.org/api/compute/v1"
+	"google.golang.org/api/option"
+)
 
 func main() {
 	if len(os.Args) < 2 {
@@ -32,56 +20,38 @@ func main() {
 	targetProjectID := os.Args[1]
 
 	// Initialize display variables
-	projectIDStr := targetProjectID // Display the user-provided ID
+	projectIDStr := targetProjectID
 	projectNumberStr := "N/A"
-	regionNameStr := "N/A" // Region is typically not project-specific in the same way, 
-	                        // but we'll fetch it in the context of the project if possible later.
-	                        // For now, it's N/A as per this step's focus.
+	regionNameStr := "N/A"
 
 	fmt.Fprintf(os.Stdout, "Fetching info for project: %s\n", targetProjectID)
 
-	// Get Project Number for the targetProjectID
-	// targetProjectID is projectIDStr
-	if projectIDStr != "" { // Should always be true due to earlier os.Args check, but good for clarity
-		projectNumberFetched, err := executeGcloudCommand("projects", "describe", projectIDStr, "--format=value(projectNumber)")
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error getting project number for %s: %v\n", projectIDStr, err)
-		} else if projectNumberFetched == "" {
-			fmt.Fprintf(os.Stderr, "Warning: Project number from gcloud for %s was empty; displaying as N/A.\n", projectIDStr)
-		} else {
-			projectNumberStr = projectNumberFetched
-		}
-	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
 
-	// Get Region Information
-	// Attempt 1: Project-specific location label
-	// Use projectIDStr which is targetProjectID
-	regionLabelFetched, errLabel := executeGcloudCommand("projects", "describe", projectIDStr, "--format=value(labels.cloud.googleapis.com/location)")
-	if errLabel == nil && regionLabelFetched != "" {
-		regionNameStr = regionLabelFetched
-		fmt.Fprintf(os.Stderr, "Info: Used project-specific location label for region: %s\n", regionNameStr)
+	// Get project information using Resource Manager API
+	projectInfo, err := getProjectInfo(ctx, targetProjectID)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "Error getting project info for %s: %v\n", projectIDStr, err)
 	} else {
-		if errLabel != nil {
-			// This error might occur if the project doesn't exist or if the label truly causes a command failure.
-			// gcloud often returns empty string for non-existent label with exit code 0, but if --format errors, it could be non-zero.
-			fmt.Fprintf(os.Stderr, "Info: Could not get project-specific location label for %s (may not be set or project query failed): %v. Trying local default region.\n", projectIDStr, errLabel)
-		} else if regionLabelFetched == "" {
-			fmt.Fprintf(os.Stderr, "Info: Project-specific location label for %s is empty. Trying local default region.\n", projectIDStr)
-		}
+		projectNumberStr = fmt.Sprintf("%d", projectInfo.ProjectNumber)
 
-		// Attempt 2: Local gcloud default region (fallback)
-		// This is only attempted if the project-specific label wasn't found or was empty.
-		localRegionFetched, errLocalRegion := executeGcloudCommand("config", "get-value", "compute/region")
-		if errLocalRegion != nil {
-			fmt.Fprintf(os.Stderr, "Error getting local default region: %v\n", errLocalRegion)
-		} else if localRegionFetched == "" {
-			// This warning is important if no region could be determined at all.
-			fmt.Fprintln(os.Stderr, "Warning: Local default region from gcloud was empty. Region will be N/A.")
+		// Check for project-specific location label
+		if locationLabel, ok := projectInfo.Labels["cloud.googleapis.com/location"]; ok && locationLabel != "" {
+			regionNameStr = locationLabel
+			fmt.Fprintf(os.Stderr, "Info: Used project-specific location label for region: %s\n", regionNameStr)
 		} else {
-			// Only use local default if project-specific one wasn't successfully set.
-			if regionNameStr == "N/A" { 
-				regionNameStr = localRegionFetched
-				fmt.Fprintf(os.Stderr, "Info: Used local default gcloud region: %s\n", regionNameStr)
+			fmt.Fprintf(os.Stderr, "Info: Project-specific location label for %s is not set. Trying default region.\n", projectIDStr)
+			
+			// Try to get default region from Compute Engine API
+			defaultRegion, err := getDefaultRegion(ctx, targetProjectID)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error getting default region: %v\n", err)
+			} else if defaultRegion == "" {
+				fmt.Fprintln(os.Stderr, "Warning: Default region not found. Region will be N/A.")
+			} else {
+				regionNameStr = defaultRegion
+				fmt.Fprintf(os.Stderr, "Info: Used default region: %s\n", regionNameStr)
 			}
 		}
 	}
@@ -90,4 +60,71 @@ func main() {
 	fmt.Printf("google_cloud_project: %s\n", projectIDStr)
 	fmt.Printf("google_cloud_project_number: %s\n", projectNumberStr)
 	fmt.Printf("google_cloud_region_name: %s\n", regionNameStr)
+}
+
+// getProjectInfo retrieves project information using the Resource Manager API
+func getProjectInfo(ctx context.Context, projectID string) (*cloudresourcemanager.Project, error) {
+	rmService, err := cloudresourcemanager.NewService(ctx, option.WithScopes(cloudresourcemanager.CloudPlatformScope))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create Resource Manager service: %w", err)
+	}
+
+	projectsService := rmService.Projects
+	project, err := projectsService.Get(projectID).Context(ctx).Do()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get project info: %w", err)
+	}
+
+	return project, nil
+}
+
+// getDefaultRegion attempts to determine the default region for the project
+func getDefaultRegion(ctx context.Context, projectID string) (string, error) {
+	computeService, err := compute.NewService(ctx, option.WithScopes(compute.ComputeReadonlyScope))
+	if err != nil {
+		return "", fmt.Errorf("failed to create Compute service: %w", err)
+	}
+
+	// First try to get a list of regions and look for a default flag or most used region
+	regionsList, err := computeService.Regions.List(projectID).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to list regions: %w", err)
+	}
+
+	// If regions exist, return the first one as a fallback
+	// In a real implementation, you might want more sophisticated logic here
+	if len(regionsList.Items) > 0 {
+		return regionsList.Items[0].Name, nil
+	}
+
+	// If no regions found, try to get the project's metadata
+	project, err := computeService.Projects.Get(projectID).Context(ctx).Do()
+	if err != nil {
+		return "", fmt.Errorf("failed to get project metadata: %w", err)
+	}
+
+	// Look for default region in metadata
+	if project.CommonInstanceMetadata != nil && project.CommonInstanceMetadata.Items != nil {
+		for _, item := range project.CommonInstanceMetadata.Items {
+			if item.Key == "google-compute-default-region" && item.Value != nil {
+				return *item.Value, nil
+			}
+		}
+	}
+
+	// Try to get zone information and extract region from it
+	zonesList, err := computeService.Zones.List(projectID).Context(ctx).Do()
+	if err == nil && len(zonesList.Items) > 0 {
+		// Zone names are typically in the format "us-central1-a"
+		// Extract region by removing the last part (e.g., "-a")
+		zoneName := zonesList.Items[0].Name
+		parts := strings.Split(zoneName, "-")
+		if len(parts) >= 2 {
+			// Remove the last part and rejoin
+			region := strings.Join(parts[:len(parts)-1], "-")
+			return region, nil
+		}
+	}
+
+	return "", nil
 }

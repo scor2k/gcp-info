@@ -1,30 +1,31 @@
 # GCP Info Tool
 
-A simple command-line utility to display Google Cloud Platform project information.
+A simple command-line utility to display Google Cloud Platform project information using the Google Cloud APIs.
 
 ## Overview
 
 This tool fetches and prints the following GCP information for a **specified project ID** passed as a command-line argument:
 - Google Cloud Project ID (this will be the ID you provide)
-- Google Cloud Project Number (fetched based on the provided Project ID)
+- Google Cloud Project Number (fetched based on the provided Project ID using Resource Manager API)
 - Google Cloud Region Name
 
-Region information is determined first by checking a project-specific location label (`cloud.googleapis.com/location`) on the provided project; if not found or empty, it falls back to the local `gcloud` default compute region.
+Region information is determined first by checking a project-specific location label (`cloud.googleapis.com/location`) on the provided project; if not found or empty, it falls back to retrieving region information from the Compute Engine API.
 
 ## Prerequisites
 
-Before using this tool, you must have the [Google Cloud SDK (`gcloud`)](https://cloud.google.com/sdk/docs/install) installed and configured on your system. This means you should be authenticated:
+Before using this tool, you must have authentication set up for Google Cloud. The tool uses [Application Default Credentials (ADC)](https://cloud.google.com/docs/authentication/application-default-credentials) to authenticate with Google Cloud APIs.
+
+You can set up ADC by:
 ```bash
-gcloud auth login
 gcloud auth application-default login
 ```
-And ideally, have a default project and region configured:
+
+Or by setting the `GOOGLE_APPLICATION_CREDENTIALS` environment variable to point to a service account key file:
 ```bash
-gcloud config set project YOUR_PROJECT_ID
-gcloud config set compute/region YOUR_REGION
+export GOOGLE_APPLICATION_CREDENTIALS="/path/to/your/service-account-key.json"
 ```
-The tool relies on `gcloud` to source this information. If `gcloud` is not found, the tool will output "N/A" for the respective fields and print errors to stderr. 
-Additionally, the authenticated `gcloud` user must have the necessary IAM permissions (e.g., `resourcemanager.projects.get`) to describe the project ID you provide.
+
+The authenticated user or service account must have the necessary IAM permissions (e.g., `resourcemanager.projects.get`) to access the project ID you provide.
 
 ## Usage
 
@@ -39,6 +40,7 @@ Additionally, the authenticated `gcloud` user must have the necessary IAM permis
 
 Expected output:
 ```
+Fetching info for project: your-project-id-here
 google_cloud_project: your-project-id-here
 google_cloud_project_number: 123456789012
 google_cloud_region_name: us-central1
@@ -52,12 +54,16 @@ If any value cannot be determined, it will show `N/A`.
     git clone <repository_clone_url> # Replace with actual repository clone URL
     cd <repository_directory_name> # Replace with actual repository directory name
     ```
-2.  Build the tool:
+2.  Install dependencies:
+    ```bash
+    go mod tidy
+    ```
+3.  Build the tool:
     ```bash
     go build ./gcp_info.go
     ```
     This will create an executable named `gcp_info` (or `gcp_info.exe` on Windows) in the current directory.
-3.  Run the built tool, providing the target project ID as an argument:
+4.  Run the built tool, providing the target project ID as an argument:
     ```bash
     ./gcp_info your-project-id-here
     ```
@@ -65,6 +71,18 @@ If any value cannot be determined, it will show `N/A`.
 ## Releases
 
 Pre-compiled binaries for Linux (amd64) and macOS (amd64, arm64) are automatically generated and attached to GitHub Releases whenever a new version tag (e.g., `v1.0.0`, `v1.1.0-beta.1`) is pushed to the repository.
+
+## Required APIs
+
+The following Google Cloud APIs must be enabled in your project:
+- Resource Manager API
+- Compute Engine API
+
+You can enable these APIs using the Google Cloud Console or with the following commands:
+```bash
+gcloud services enable cloudresourcemanager.googleapis.com
+gcloud services enable compute.googleapis.com
+```
 
 ## Contributing
 
