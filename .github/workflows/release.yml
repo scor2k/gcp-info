@@ -1,0 +1,73 @@
+name: Release Go Binary
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+jobs:
+  build-and-release:
+    runs-on: ubuntu-latest
+    permissions: # Needed for creating release and uploading assets
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.22' # Or a similarly recent version
+
+      - name: Build for Linux (amd64)
+        run: GOOS=linux GOARCH=amd64 go build -o gcp_info-linux-amd64 ./gcp_info.go
+
+      - name: Build for macOS (amd64)
+        run: GOOS=darwin GOARCH=amd64 go build -o gcp_info-macos-amd64 ./gcp_info.go
+
+      - name: Build for macOS (arm64)
+        run: GOOS=darwin GOARCH=arm64 go build -o gcp_info-macos-arm64 ./gcp_info.go
+
+      - name: Create Release
+        id: create_release
+        uses: actions/create-release@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tag_name: ${{ github.ref_name }} # Use github.ref_name for cleaner tag name
+          release_name: Release ${{ github.ref_name }}
+          body: |
+            Automated release for ${{ github.ref_name }}
+            This tool requires 'gcloud' to be installed and configured on the system where it runs.
+          draft: false
+          prerelease: ${{ contains(github.ref_name, 'alpha') || contains(github.ref_name, 'beta') }}
+
+      - name: Upload Linux amd64 Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./gcp_info-linux-amd64
+          asset_name: gcp_info-linux-amd64
+          asset_content_type: application/octet-stream
+
+      - name: Upload macOS amd64 Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./gcp_info-macos-amd64
+          asset_name: gcp_info-macos-amd64
+          asset_content_type: application/octet-stream
+
+      - name: Upload macOS arm64 Asset
+        uses: actions/upload-release-asset@v1
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          upload_url: ${{ steps.create_release.outputs.upload_url }}
+          asset_path: ./gcp_info-macos-arm64
+          asset_name: gcp_info-macos-arm64
+          asset_content_type: application/octet-stream
