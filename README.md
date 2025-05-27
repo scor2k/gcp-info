@@ -9,7 +9,11 @@ This tool fetches and prints the following GCP information for a **specified pro
 - Google Cloud Project Number (fetched based on the provided Project ID using Resource Manager API)
 - Google Cloud Region Name
 
-Region information is determined first by checking a project-specific location label (`cloud.googleapis.com/location`) on the provided project; if not found or empty, it falls back to retrieving region information from the Compute Engine API.
+Region information is determined using the following priority order:
+1. Project-specific location label (`cloud.googleapis.com/location`) if set on the project
+2. Region of any existing Compute Engine instance in the project (most reliable for active projects)
+3. Project metadata for default region configuration
+4. First available zone's region as a final fallback
 
 ## Prerequisites
 

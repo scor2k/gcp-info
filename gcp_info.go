@@ -85,19 +85,35 @@ func getDefaultRegion(ctx context.Context, projectID string) (string, error) {
 		return "", fmt.Errorf("failed to create Compute service: %w", err)
 	}
 
-	// First try to get a list of regions and look for a default flag or most used region
-	regionsList, err := computeService.Regions.List(projectID).Context(ctx).Do()
+	// First try to find any compute instance and use its region
+	instancesList, err := computeService.Instances.AggregatedList(projectID).Context(ctx).Do()
 	if err != nil {
-		return "", fmt.Errorf("failed to list regions: %w", err)
+		return "", fmt.Errorf("failed to list instances: %w", err)
 	}
 
-	// If regions exist, return the first one as a fallback
-	// In a real implementation, you might want more sophisticated logic here
-	if len(regionsList.Items) > 0 {
-		return regionsList.Items[0].Name, nil
+	// Look for any instance and extract region from its zone
+	for _, instancesScopedList := range instancesList.Items {
+		if instancesScopedList.Instances != nil && len(instancesScopedList.Instances) > 0 {
+			// Get the first instance found
+			instance := instancesScopedList.Instances[0]
+			// Zone is in format: "projects/PROJECT_ID/zones/ZONE_NAME"
+			// or just "ZONE_NAME", extract the zone name
+			zoneParts := strings.Split(instance.Zone, "/")
+			zoneName := zoneParts[len(zoneParts)-1]
+			
+			// Zone names are typically in the format "us-central1-a"
+			// Extract region by removing the last part (e.g., "-a")
+			parts := strings.Split(zoneName, "-")
+			if len(parts) >= 2 {
+				// Remove the last part and rejoin
+				region := strings.Join(parts[:len(parts)-1], "-")
+				fmt.Fprintf(os.Stderr, "Info: Used region from existing compute instance: %s\n", region)
+				return region, nil
+			}
+		}
 	}
 
-	// If no regions found, try to get the project's metadata
+	// Fallback: try to get the project's metadata
 	project, err := computeService.Projects.Get(projectID).Context(ctx).Do()
 	if err != nil {
 		return "", fmt.Errorf("failed to get project metadata: %w", err)
@@ -107,12 +123,13 @@ func getDefaultRegion(ctx context.Context, projectID string) (string, error) {
 	if project.CommonInstanceMetadata != nil && project.CommonInstanceMetadata.Items != nil {
 		for _, item := range project.CommonInstanceMetadata.Items {
 			if item.Key == "google-compute-default-region" && item.Value != nil {
+				fmt.Fprintf(os.Stderr, "Info: Used region from project metadata: %s\n", *item.Value)
 				return *item.Value, nil
 			}
 		}
 	}
 
-	// Try to get zone information and extract region from it
+	// Final fallback: try to get zone information and extract region from it
 	zonesList, err := computeService.Zones.List(projectID).Context(ctx).Do()
 	if err == nil && len(zonesList.Items) > 0 {
 		// Zone names are typically in the format "us-central1-a"
@@ -122,6 +139,7 @@ func getDefaultRegion(ctx context.Context, projectID string) (string, error) {
 		if len(parts) >= 2 {
 			// Remove the last part and rejoin
 			region := strings.Join(parts[:len(parts)-1], "-")
+			fmt.Fprintf(os.Stderr, "Info: Used region from available zone: %s\n", region)
 			return region, nil
 		}
 	}
