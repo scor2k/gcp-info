@@ -25,23 +25,24 @@ func executeGcloudCommand(args ...string) (string, error) {
 }
 
 func main() {
-	projectIDStr := "N/A"
-	projectNumberStr := "N/A"
-	regionNameStr := "N/A"
-
-    // ---- REFINED ASSIGNMENT LOGIC ----
-    // Get Project ID
-	projectIDFetched, err := executeGcloudCommand("config", "get-value", "project")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting project ID: %v\n", err)
-	} else if projectIDFetched == "" {
-		fmt.Fprintln(os.Stderr, "Warning: Project ID from gcloud was empty; displaying as N/A.")
-	} else {
-		projectIDStr = projectIDFetched
+	if len(os.Args) < 2 {
+		fmt.Fprintln(os.Stderr, "Usage: ./gcp_info <project_id>")
+		os.Exit(1)
 	}
+	targetProjectID := os.Args[1]
 
-	// Get Project Number
-	if projectIDStr != "N/A" { // Only try if we have a valid project ID
+	// Initialize display variables
+	projectIDStr := targetProjectID // Display the user-provided ID
+	projectNumberStr := "N/A"
+	regionNameStr := "N/A" // Region is typically not project-specific in the same way, 
+	                        // but we'll fetch it in the context of the project if possible later.
+	                        // For now, it's N/A as per this step's focus.
+
+	fmt.Fprintf(os.Stdout, "Fetching info for project: %s\n", targetProjectID)
+
+	// Get Project Number for the targetProjectID
+	// targetProjectID is projectIDStr
+	if projectIDStr != "" { // Should always be true due to earlier os.Args check, but good for clarity
 		projectNumberFetched, err := executeGcloudCommand("projects", "describe", projectIDStr, "--format=value(projectNumber)")
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error getting project number for %s: %v\n", projectIDStr, err)
@@ -52,14 +53,37 @@ func main() {
 		}
 	}
 
-	// Get Region
-	regionNameFetched, err := executeGcloudCommand("config", "get-value", "compute/region")
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "Error getting region: %v\n", err)
-	} else if regionNameFetched == "" {
-		fmt.Fprintln(os.Stderr, "Warning: Region from gcloud was empty; displaying as N/A.")
+	// Get Region Information
+	// Attempt 1: Project-specific location label
+	// Use projectIDStr which is targetProjectID
+	regionLabelFetched, errLabel := executeGcloudCommand("projects", "describe", projectIDStr, "--format=value(labels.cloud.googleapis.com/location)")
+	if errLabel == nil && regionLabelFetched != "" {
+		regionNameStr = regionLabelFetched
+		fmt.Fprintf(os.Stderr, "Info: Used project-specific location label for region: %s\n", regionNameStr)
 	} else {
-		regionNameStr = regionNameFetched
+		if errLabel != nil {
+			// This error might occur if the project doesn't exist or if the label truly causes a command failure.
+			// gcloud often returns empty string for non-existent label with exit code 0, but if --format errors, it could be non-zero.
+			fmt.Fprintf(os.Stderr, "Info: Could not get project-specific location label for %s (may not be set or project query failed): %v. Trying local default region.\n", projectIDStr, errLabel)
+		} else if regionLabelFetched == "" {
+			fmt.Fprintf(os.Stderr, "Info: Project-specific location label for %s is empty. Trying local default region.\n", projectIDStr)
+		}
+
+		// Attempt 2: Local gcloud default region (fallback)
+		// This is only attempted if the project-specific label wasn't found or was empty.
+		localRegionFetched, errLocalRegion := executeGcloudCommand("config", "get-value", "compute/region")
+		if errLocalRegion != nil {
+			fmt.Fprintf(os.Stderr, "Error getting local default region: %v\n", errLocalRegion)
+		} else if localRegionFetched == "" {
+			// This warning is important if no region could be determined at all.
+			fmt.Fprintln(os.Stderr, "Warning: Local default region from gcloud was empty. Region will be N/A.")
+		} else {
+			// Only use local default if project-specific one wasn't successfully set.
+			if regionNameStr == "N/A" { 
+				regionNameStr = localRegionFetched
+				fmt.Fprintf(os.Stderr, "Info: Used local default gcloud region: %s\n", regionNameStr)
+			}
+		}
 	}
 
 	// Print final formatted output
