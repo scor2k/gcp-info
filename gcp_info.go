@@ -64,7 +64,7 @@ func main() {
 
 // getProjectInfo retrieves project information using the Resource Manager API
 func getProjectInfo(ctx context.Context, projectID string) (*cloudresourcemanager.Project, error) {
-	rmService, err := cloudresourcemanager.NewService(ctx, option.WithScopes(cloudresourcemanager.CloudPlatformScope))
+	rmService, err := cloudresourcemanager.NewService(ctx, option.WithScopes(cloudresourcemanager.CloudPlatformScope), option.WithQuotaProject(projectID))
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Resource Manager service: %w", err)
 	}
@@ -80,7 +80,7 @@ func getProjectInfo(ctx context.Context, projectID string) (*cloudresourcemanage
 
 // getDefaultRegion attempts to determine the default region for the project
 func getDefaultRegion(ctx context.Context, projectID string) (string, error) {
-	computeService, err := compute.NewService(ctx, option.WithScopes(compute.ComputeReadonlyScope))
+	computeService, err := compute.NewService(ctx, option.WithScopes(compute.ComputeReadonlyScope), option.WithQuotaProject(projectID))
 	if err != nil {
 		return "", fmt.Errorf("failed to create Compute service: %w", err)
 	}
